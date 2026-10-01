@@ -16,6 +16,12 @@ final class Router
         $path = $req->path;
         $method = $req->method;
 
+        // Canonical API lives under /api/v1/... ; the unversioned
+        // /api/... form stays as a backward-compatible alias.
+        if (preg_match('#^/api/v1(/.*)$#', $path, $v1) === 1) {
+            $path = '/api' . $v1[1];
+        }
+
         if ($method === 'GET' && $path === '/api/health') {
             SystemController::health($req);
             return;

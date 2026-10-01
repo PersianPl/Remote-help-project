@@ -6,6 +6,7 @@ namespace RH\Signaling;
 use RH\Api\Request;
 use RH\Api\Response;
 use RH\Auth\Guard;
+use RH\Session\InvalidTransitionException;
 use RH\Session\RateLimiter;
 use RH\Session\SessionState;
 
@@ -24,6 +25,21 @@ final class SignalController
 {
     private const NAMES = ['offer', 'answer', 'ice', 'status'];
 
+    /**
+     * Role permissions per signal name (prompt stage 6).
+     *
+     * The host owns the outgoing screen stream, so the host is the
+     * WebRTC offerer; only the viewer may answer. ICE and status flow
+     * both ways. Without this matrix a viewer could inject a forged
+     * answer in the host's name.
+     */
+    private const ROLE_MATRIX = [
+        'offer' => ['host'],
+        'answer' => ['viewer'],
+        'ice' => ['host', 'viewer'],
+        'status' => ['host', 'viewer'],
+    ];
+
     public static function poll(Request $req): void
     {
         $auth = (new Guard(database(), store()))->requireParticipant($req);
@@ -34,6 +50,11 @@ final class SignalController
             $req->queryFloat('hold', (float) $cfg['max_hold']),
             (float) $cfg['max_hold']
         ));
+        // Final sessions must not hold the connection open (stage 7:
+        // "expired sessions don't poll forever") — drain and return now.
+        if (SessionState::isFinal($auth['session']['state'])) {
+            $hold = 0.0;
+        }
 
         // Keep proxies from buffering the held response.
         header('X-Accel-Buffering: no');
@@ -78,8 +99,13 @@ final class SignalController
         if (!is_string($name) || !in_array($name, self::NAMES, true)) {
             Response::error('unknown_signal_name', 'name must be one of: ' . implode(', ', self::NAMES), 400);
         }
+        // Protocol version check (stage 6): v1 is the only known version.
+        if (array_key_exists('v', $req->body) && $req->body['v'] !== 1) {
+            Response::error('unsupported_protocol_version', 'Only protocol version 1 is supported', 400);
+        }
+
         $payload = $req->body['payload'] ?? [];
-        if (!is_array($payload)) {
+        if (!is_array($payload) || (array_is_list($payload) && $payload !== [])) {
             Response::error('invalid_payload', 'payload must be a JSON object', 400);
         }
 
@@ -104,17 +130,26 @@ final class SignalController
             Response::error('state_not_allowed', 'Signaling is not allowed in this state', 409, ['state' => $state]);
         }
 
+        // Role matrix enforced before anything is written to the queue.
+        if (!in_array($role, self::ROLE_MATRIX[$name], true)) {
+            Response::error('role_not_allowed', "Role '{$role}' may not send '{$name}'", 403);
+        }
+
         $id = signals()->append($session['id'], $role, $name, $payload);
 
         // Advance the state machine based on the signal itself.
-        if (($name === 'offer' || $name === 'answer') && $state === SessionState::APPROVED) {
-            store()->transition($session['id'], SessionState::NEGOTIATING);
-        }
-        if ($name === 'status'
-            && ($payload['state'] ?? '') === 'connected'
-            && in_array($state, [SessionState::APPROVED, SessionState::NEGOTIATING], true)
-        ) {
-            store()->transition($session['id'], SessionState::CONNECTED);
+        try {
+            if ($name === 'offer' && $state === SessionState::APPROVED) {
+                store()->transition($session['id'], SessionState::NEGOTIATING);
+            }
+            if ($name === 'status'
+                && ($payload['state'] ?? '') === 'connected'
+                && $state === SessionState::NEGOTIATING
+            ) {
+                store()->transition($session['id'], SessionState::CONNECTED);
+            }
+        } catch (InvalidTransitionException) {
+            Response::error('invalid_state', 'State transition rejected', 409, ['state' => $state]);
         }
 
         Response::json(['id' => $id], 201);

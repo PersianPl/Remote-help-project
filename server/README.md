@@ -58,9 +58,12 @@ php tests/run_tests.php
    پوشه `public/` تنظیم کنید. TLS رایگان (Let's Encrypt) را فعال کنید.
 6. **تست نهایی:**
    ```text
-   GET https://api.example.ir/api/health          → {"ok":true,...}
-   GET https://api.example.ir/api/health?hold=8   → پاسخ بعد از ~8 ثانیه
+   GET https://api.example.ir/api/v1/health          → {"ok":true,"service":"remote-help-server",
+                                                          "version":"1","database":"ok",...}
+   GET https://api.example.ir/api/v1/health?hold=8   → پاسخ بعد از ~8 ثانیه
+   POST https://api.example.ir/api/v1/sessions       → 201 + code
    ```
+   اگر `database` مقدار `error` یا HTTP 503 برگشت، اطلاعات دیتابیس در `config/config.php` را چک کنید.
 7. پس از استقرار، `config/config.php` هرگز از طریق وب قابل دسترسی نیست
    (بیرون از `public/` است) و `.htaccess` ریشه هم پوشه‌های حساس را مسدود می‌کند.
 
@@ -72,16 +75,27 @@ php tests/run_tests.php
 
 ## خلاصه API
 
+مسیر کاننیکال `/api/v1/...` است؛ نسخه `/api/...` هم به‌عنوان alias کار می‌کند.
+
 | متد و مسیر | نقش | خروجی |
 |---|---|---|
-| `POST /api/sessions` | — | `201` + `code` + `host_token` |
-| `POST /api/sessions/{کد}/join` | — | `viewer_token` (یک‌بارمصرف) |
-| `POST /api/sessions/{id}/approve` | host | `state=approved` |
-| `POST /api/sessions/{id}/reject` | host | `state=closed` |
-| `POST /api/sessions/{id}/close` | هر دو | `state=closed` |
-| `GET /api/sessions/{id}` | participant | وضعیت + نقش |
-| `GET /api/signal?since=&hold=` | participant | `{messages[], state}` (نگه‌داشته می‌شود) |
-| `POST /api/signal` | participant | `201 {id}` — فقط پس از approve |
+| `GET /api/v1/health` | همه | `{ok, service, version, database, ...}` |
+| `POST /api/v1/sessions` | — | `201` + `code` + `host_token` |
+| `POST /api/v1/sessions/{کد}/join` | — | `viewer_token` (یک‌بارمصرف) |
+| `POST /api/v1/sessions/{id}/approve` | host | `state=approved` |
+| `POST /api/v1/sessions/{id}/reject` | host | `state=closed` |
+| `POST /api/v1/sessions/{id}/close` | هر دو | `state=closed` |
+| `GET /api/v1/sessions/{id}` | participant | وضعیت + نقش |
+| `GET /api/v1/signal?since=&hold=` | participant | `{messages[], state}` (نگه‌داشته می‌شود) |
+| `POST /api/v1/signal` | participant | `201 {id}` — فقط پس از approve؛ matrix نقش‌ها اجرا می‌شود |
+
+نمونه پاسخ Health:
+
+```json
+{"ok": true, "service": "remote-help-server", "version": "1",
+ "database": "ok", "db_latency_ms": 1.2, "time": 1790800000,
+ "php": "8.3.3", "held": 0.0, "max_hold": 20}
+```
 
 قرارداد کامل پیام‌ها: **`shared/protocol/v1.md`** و `shared/protocol/v1.schema.json`.
 
@@ -92,7 +106,10 @@ php tests/run_tests.php
 - توکن‌ها فقط به‌صورت hash (SHA-256) در DB نگه داشته می‌شوند؛ در Log نمی‌آیند.
 - کد جلسه با CSPRNG ساخته می‌شود + Rate Limit روی `join` (هر IP و هر کد).
 - Signaling (offer/answer/ice) فقط پس از `approve` مجاز است.
-- حداکظر اندازه پیام Signal: `max_payload_bytes` (پیش‌فرض 256KB).
+- حداکثر اندازه پیام Signal: `max_payload_bytes` (پیش‌فرض 256KB).
+- Security headers روی همه پاسخ‌ها: `X-Content-Type-Options: nosniff`، `X-Frame-Options: DENY`، `Referrer-Policy: no-referrer`.
+- State machine سخت‌گیرانه: هر انتقال خارج از جدول `SessionState::ALLOWED` رد می‌شود.
+- Matrix نقش‌ها در Signaling: `offer` فقط host، `answer` فقط viewer (پاسخ 403 در غیر این صورت).
 - Expiration تنبل (lazy) انجام می‌شود — هر درخواست وضعیت انقضا را چک می‌کند.
 - TURN/STUN در این حالت وجود ندارد؛ پس از Decision Gate (بخش 67.4) اضافه شود.
 

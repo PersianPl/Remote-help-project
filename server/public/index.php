@@ -20,6 +20,12 @@ if (function_exists('ob_implicit_flush')) {
 }
 header_remove('X-Powered-By');
 
+// Security headers (prompt stage 16). API returns JSON only —
+// nosniff + frame denial + no referrer cover the relevant surface.
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
+header('Referrer-Policy: no-referrer');
+
 try {
     $request = new Request();
 

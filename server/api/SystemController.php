@@ -9,10 +9,12 @@ namespace RH\Api;
 final class SystemController
 {
     /**
-     * GET /api/health
+     * GET /api/health (alias: /api/v1/health)
      * GET /api/health?hold=N — holds the connection N seconds (clamped to
      * max_hold) and reports how long it actually survived. Used by
      * tools/host_probe.php to verify long-polling on shared hosting.
+     *
+     * Never exposes credentials, paths or schema details.
      */
     public static function health(Request $req): void
     {
@@ -30,12 +32,28 @@ final class SystemController
             }
         }
 
+        // Cheap database probe — result only, no error details leak.
+        $dbStatus = 'ok';
+        $dbLatencyMs = 0.0;
+        $dbStart = microtime(true);
+        try {
+            database()->pdo()->query('SELECT 1');
+        } catch (Throwable) {
+            $dbStatus = 'error';
+        }
+        $dbLatencyMs = round((microtime(true) - $dbStart) * 1000, 2);
+
+        $healthy = $dbStatus === 'ok';
         Response::json([
-            'ok' => true,
+            'ok' => $healthy,
+            'service' => 'remote-help-server',
+            'version' => '1',
+            'database' => $dbStatus,
+            'db_latency_ms' => $dbLatencyMs,
             'time' => time(),
             'php' => PHP_VERSION,
             'held' => round(microtime(true) - $start, 3),
             'max_hold' => (int) $cfg['max_hold'],
-        ]);
+        ], $healthy ? 200 : 503);
     }
 }

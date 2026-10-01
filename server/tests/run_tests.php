@@ -300,8 +300,10 @@ if ($up2 && is_resource($server2)) {
     $delivered = json_decode((string) ($helperJson['raw'] ?? ''), true) ?: [];
     $deliveredNames = array_column($delivered['messages'] ?? [], 'name');
     $deliveredIce = in_array('ice', $deliveredNames, true);
-    check($pushed['status'] === 201 && $deliveredIce && ($helperJson['elapsed'] ?? 0) >= 0.4,
-        'message written by another process reached the held connection',
+    check($pushed['status'] === 201 && $deliveredIce
+        && ($helperJson['elapsed'] ?? 0) >= 0.4
+        && ($helperJson['elapsed'] ?? 0) <= 2.5,
+        'mid-poll delivery: message arrives within 2.5s',
         $helperOut);
 } else {
     echo "  [SKIP] mid-poll delivery -- could not start the second server instance\n";
@@ -364,6 +366,77 @@ check($fallback['status'] === 200 && ($fallback['json']['ok'] ?? false) === true
     'query-string routing works', $fallback['raw']);
 $notFound = req('GET', '/api/does-not-exist');
 check($notFound['status'] === 404, 'unknown endpoint -> 404', $notFound['raw']);
+
+section('API v1 canonical paths + health contract (stage 2)');
+$v1h = req('GET', '/api/v1/health');
+check($v1h['status'] === 200 && ($v1h['json']['ok'] ?? false) === true, 'GET /api/v1/health -> ok');
+check(($v1h['json']['service'] ?? '') === 'remote-help-server', 'health reports service name');
+check(($v1h['json']['version'] ?? '') === '1', 'health reports version');
+check(($v1h['json']['database'] ?? '') === 'ok', 'health reports database ok');
+check(($v1h['json']['db_latency_ms'] ?? -1) >= 0, 'health reports db latency');
+$aliasHealth = req('GET', '/api/health');
+check($aliasHealth['status'] === 200 && ($aliasHealth['json']['service'] ?? '') === 'remote-help-server',
+    'unversioned /api/health alias works');
+
+section('Signal role matrix + protocol version (stage 6)');
+$v1c = req('POST', '/api/v1/sessions', []);
+check($v1c['status'] === 201, 'POST /api/v1/sessions -> 201', $v1c['raw']);
+$v1sid = (string) ($v1c['json']['session_id'] ?? '');
+$v1host = (string) ($v1c['json']['host_token'] ?? '');
+$v1j = req('POST', '/api/v1/sessions/' . ((string) ($v1c['json']['code'] ?? '')) . '/join', []);
+$v1viewer = (string) ($v1j['json']['viewer_token'] ?? '');
+$v1a = req('POST', '/api/v1/sessions/' . $v1sid . '/approve', [], $v1host);
+check($v1a['status'] === 200 && ($v1a['json']['state'] ?? '') === 'approved', 'v1 join+approve flow', $v1a['raw']);
+
+$role1 = req('POST', '/api/signal', ['name' => 'offer', 'payload' => ['sdp' => 'x']], $v1viewer);
+check($role1['status'] === 403 && ($role1['json']['error']['code'] ?? '') === 'role_not_allowed',
+    'viewer cannot send offer -> 403', $role1['raw']);
+$role2 = req('POST', '/api/signal', ['name' => 'answer', 'payload' => ['sdp' => 'x']], $v1host);
+check($role2['status'] === 403 && ($role2['json']['error']['code'] ?? '') === 'role_not_allowed',
+    'host cannot send answer -> 403', $role2['raw']);
+$ver = req('POST', '/api/signal', ['v' => 2, 'name' => 'ice', 'payload' => []], $v1host);
+check($ver['status'] === 400 && ($ver['json']['error']['code'] ?? '') === 'unsupported_protocol_version',
+    'protocol version 2 rejected -> 400', $ver['raw']);
+$lst = req('POST', '/api/signal', ['v' => 1, 'name' => 'ice', 'payload' => [1, 2, 3]], $v1host);
+check($lst['status'] === 400 && ($lst['json']['error']['code'] ?? '') === 'invalid_payload',
+    'array payload rejected -> 400', $lst['raw']);
+$okOffer = req('POST', '/api/signal', ['v' => 1, 'name' => 'offer', 'payload' => ['sdp' => 'x']], $v1host);
+check($okOffer['status'] === 201, 'host offer with v:1 -> 201', $okOffer['raw']);
+$okAnswer = req('POST', '/api/signal', ['v' => 1, 'name' => 'answer', 'payload' => ['sdp' => 'y']], $v1viewer);
+check($okAnswer['status'] === 201, 'viewer answer with v:1 -> 201', $okAnswer['raw']);
+
+section('Long-poll on final sessions must not hang (stage 7)');
+$closedV1 = req('POST', '/api/sessions/' . $v1sid . '/close', [], $v1host);
+check($closedV1['status'] === 200 && ($closedV1['json']['state'] ?? '') === 'closed', 'v1 session closed');
+$pullStart = microtime(true);
+$pull = req('GET', '/api/signal?since=0&hold=20', null, $v1host, 25.0);
+$pullElapsed = microtime(true) - $pullStart;
+check($pull['status'] === 200 && $pullElapsed < 2.0,
+    'closed-session poll returns immediately (no hold)', sprintf('%.2fs', $pullElapsed));
+
+section('Cursor semantics — no duplicate delivery (stage 7)');
+$cur1 = req('GET', '/api/signal?since=0&hold=0', null, $v1host);
+$cur2 = req('GET', '/api/signal?since=0&hold=0', null, $v1host);
+$ids1 = array_column($cur1['json']['messages'] ?? [], 'id');
+$ids2 = array_column($cur2['json']['messages'] ?? [], 'id');
+check($ids1 !== [] && $ids1 === $ids2, 'same cursor returns the same messages', json_encode([$ids1, $ids2]));
+$cur3 = req('GET', '/api/signal?since=' . (int) max($ids1) . '&hold=0', null, $v1host);
+check(($cur3['json']['messages'] ?? []) === [], 'cursor past the last id returns no duplicates');
+
+section('State machine transition table — unit (stage 5)');
+require dirname(__DIR__) . '/bootstrap.php';
+$can = [\RH\Session\SessionState::class, 'canTransition'];
+check($can('waiting', 'join_requested'), 'waiting -> join_requested allowed');
+check($can('waiting', 'closed'), 'waiting -> closed allowed');
+check(!$can('waiting', 'connected'), 'no illegal jump waiting -> connected');
+check($can('join_requested', 'approved'), 'join_requested -> approved allowed');
+check(!$can('join_requested', 'negotiating'), 'join_requested -> negotiating blocked');
+check($can('approved', 'negotiating'), 'approved -> negotiating allowed');
+check(!$can('approved', 'connected'), 'approved -> connected must pass negotiating');
+check($can('negotiating', 'connected'), 'negotiating -> connected allowed');
+check($can('connected', 'expired'), 'connected -> expired allowed (TTL)');
+check(!$can('closed', 'waiting'), 'final state stays final');
+check(!$can('expired', 'approved'), 'expired is final');
 
 // ------------------------------------------------------------------- summary
 echo "\n----------------------------------------\n";

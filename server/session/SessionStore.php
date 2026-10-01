@@ -127,9 +127,21 @@ final class SessionStore
     /**
      * Transitions to $to and optionally enqueues a system message so the
      * other side learns about it through the same signal queue.
+     *
+     * @throws InvalidTransitionException when the move is outside the ALLOWED table
      */
     public function transition(string $sessionId, string $to, ?string $systemMessage = null, ?array $payload = null): ?array
     {
+        $current = $this->find($sessionId);
+        if ($current === null) {
+            throw new InvalidTransitionException('Session not found: ' . $sessionId);
+        }
+        if (!SessionState::canTransition($current['state'], $to)) {
+            throw new InvalidTransitionException(
+                sprintf('Illegal transition %s -> %s', $current['state'], $to)
+            );
+        }
+
         $now = now();
         $stmt = $this->db->pdo()->prepare(
             'UPDATE sessions SET state = ?, updated_at = ?, closed_at = COALESCE(closed_at, ?) WHERE id = ?'

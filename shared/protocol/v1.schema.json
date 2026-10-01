@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://remote-help.local/protocol/v1.schema.json",
   "title": "Remote Help protocol v1",
-  "description": "Wire format for POST /api/signal and GET /api/signal (long-polling transport). The same envelopes travel over WebSocket/SSE transports unchanged.",
+  "description": "Wire format for POST /api/v1/signal and GET /api/v1/signal (long-polling transport; unversioned /api/signal is a compatible alias). The same envelopes travel over WebSocket/SSE transports unchanged.",
   "type": "object",
   "properties": {
     "signalSend": {
@@ -10,9 +10,13 @@
       "required": ["name", "payload"],
       "additionalProperties": false,
       "properties": {
+        "v": {
+          "const": 1,
+          "description": "protocol version; optional in v1, must equal 1 when present"
+        },
         "name": {
           "enum": ["offer", "answer", "ice", "status"],
-          "description": "signal name (protocol v1)"
+          "description": "signal name (protocol v1). Role matrix enforced server-side: offer=host only, answer=viewer only, ice/status=both"
         },
         "payload": {
           "type": "object",
