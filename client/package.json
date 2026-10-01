@@ -1,0 +1,24 @@
+{
+  "name": "remote-help-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Remote Help — Host/Viewer client: long-poll signaling core + WebRTC + Windows capture/input",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test --test-force-exit \"test/*.test.js\"",
+    "test:unit": "node --test --test-force-exit test/unit_core.test.js test/unit_input.test.js test/unit_capture.test.js test/unit_pump.test.js",
+    "test:integration": "node --test --test-force-exit test/integration_loopback.test.js",
+    "smoke": "node tools/smoke_cli.mjs",
+    "host": "node src/host/host_cli.js",
+    "viewer": "node src/viewer/viewer_cli.js"
+  },
+  "dependencies": {
+    "jpeg-js": "^0.4.4",
+    "koffi": "^3.3.2",
+    "werift": "^0.24.4"
+  }
+}

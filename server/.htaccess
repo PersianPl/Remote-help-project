@@ -1,0 +1,10 @@
+# Remote Help — safety net for a misconfigured document root.
+#
+# Recommended: point the domain's document root at server/public/.
+# If the document root was pointed at server/ by mistake, this file
+# blocks web access to sensitive directories. Requests to /public/...
+# still work because the front controller strips that prefix.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteRule ^(config|storage|tests|tools|api|auth|session|signaling) - [F,L]
+</IfModule>

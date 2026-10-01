@@ -1,0 +1,19 @@
+# Local configuration and data (never commit)
+server/config/config.php
+server/storage/*.sqlite
+server/storage/*.sqlite-*
+server/storage/logs/
+
+# Dependencies / OS noise
+vendor/
+node_modules/
+.DS_Store
+Thumbs.db
+
+# Test/smoke artefacts
+*.log
+client/received/
+
+# Editors
+.vscode/
+.idea/
