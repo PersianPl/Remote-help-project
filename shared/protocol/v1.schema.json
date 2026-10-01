@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://remote-help.local/protocol/v1.schema.json",
+  "title": "Remote Help protocol v1",
+  "description": "Wire format for POST /api/signal and GET /api/signal (long-polling transport). The same envelopes travel over WebSocket/SSE transports unchanged.",
+  "type": "object",
+  "properties": {
+    "signalSend": {
+      "type": "object",
+      "required": ["name", "payload"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "enum": ["offer", "answer", "ice", "status"],
+          "description": "signal name (protocol v1)"
+        },
+        "payload": {
+          "type": "object",
+          "description": "name-specific content; e.g. {sdp} for offer/answer, {candidate} for ice, {state:connected} for status"
+        }
+      }
+    },
+    "signalPollResponse": {
+      "type": "object",
+      "required": ["messages", "state", "now"],
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "sender", "name", "payload", "ts"],
+            "properties": {
+              "id": { "type": "integer", "minimum": 1, "description": "global cursor; pass the max seen id back as ?since=" },
+              "sender": { "enum": ["host", "viewer", "system"] },
+              "name": {
+                "enum": [
+                  "offer", "answer", "ice", "status",
+                  "session.join_requested", "session.approved",
+                  "session.closed", "session.expired"
+                ]
+              },
+              "payload": { "type": "object" },
+              "ts": { "type": "integer", "description": "unix seconds" }
+            }
+          }
+        },
+        "state": {
+          "enum": ["waiting", "join_requested", "approved", "negotiating", "connected", "closed", "expired"]
+        },
+        "now": { "type": "integer" }
+      }
+    },
+    "error": {
+      "type": "object",
+      "required": ["error"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "string" },
+            "message": { "type": "string" },
+            "retry_after": { "type": "integer" },
+            "state": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}
